@@ -7,6 +7,7 @@
 
 #define DCF_PIN 2	         // Connection pin to DCF 77 device
 #define DCF_INTERRUPT 0		 // Interrupt number associated with pin
+#define lightPin A0        //
 
 #include "fidelio_display.h"
 
@@ -16,7 +17,7 @@
     #define clkPin 14
 
     #define stbPin 10
-    #define spiClk 400000UL 
+    #define spiClk 250000UL 
 
     FidelioDisplay display(dioPin, clkPin, stbPin, spiClk);
 
@@ -163,17 +164,23 @@ void loop() {
     // digitalClockDisplay();
     time_t LocalTime = CET.toLocal(now());
     intToTimeString(timetxt, hour(LocalTime), minute(LocalTime));
+
+    #define maxLight 200
+    int currentBrightness = analogRead(lightPin);
+    currentBrightness = constrain(currentBrightness, 0, maxLight);
+    int fidelioBrightness = map(maxLight-currentBrightness, 0, maxLight, 0, 16);
+    display.setBright(fidelioBrightness);
+    
+    Serial.print(currentBrightness);
+    Serial.print(" : ");
+    Serial.println(fidelioBrightness);   
+
     // Serial.print("TS:");
     // Serial.println(timeStatus());
-    #ifdef FIDELIODISPLAY_h
-      display.alarm( (timeStatus() != timeSet) );
-      display.pm(!DCF.bufOk);
-      display.toogleDots();
-      display.Off();
-      // display.On();
-      display.setBright(15);
-      display.write(timetxt);
-    #endif
+    display.alarm( (timeStatus() != timeSet) );
+    display.pm(!DCF.bufOk);
+    display.toogleDots(); 
+    display.write(timetxt);
     int delta = now() - dateTimeToTime_t(rtc.now());
     if ( 0 != delta) {
       if (timeStatus() == timeSet) {
