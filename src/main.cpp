@@ -4,10 +4,16 @@
 #include "Time.h"
 #include <Timezone.h>
 #include "RTClib.h"
+#include <avr/sleep.h>  // Include the AVR sleep library
+#include <avr/power.h>  // Optional, if you want to disable/enable peripherals
 
 #define DCF_PIN 2	         // Connection pin to DCF 77 device
 #define DCF_INTERRUPT 0		 // Interrupt number associated with pin
 #define lightPin A0        //
+#define pirPin    3
+#define STAYON   600000UL  // 10 min in milliseconds
+#define DELTA    10
+
 
 #include "fidelio_display.h"
 
@@ -114,12 +120,33 @@ DateTime time_tToDateTime(time_t t) {
     return DateTime(tm.Year + 1970, tm.Month, tm.Day, tm.Hour, tm.Minute, tm.Second);
 }
 
+
+void wakeUp() {
+}
+
+void goToSleep() {
+  // Simulated sleep mode
+  ADCSRA &= ~(1 << ADEN);  // Disable ADC to save power
+  set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+  sleep_enable();
+  sleep_mode();
+
+  // Processor wakes up here after ISR
+  sleep_disable();
+  ADCSRA |= (1 << ADEN);   // Re-enable ADC
+  setTime(dateTimeToTime_t(rtc.now()));
+  DCF.Start();
+}
+
 time_t prevDisplay = 0;          // when the digital clock was displayed
 time_t lastSync = 0;
 timeStatus_t lastStatus = timeNotSet;
 
 void setup() {
   Serial.begin(9600);
+
+  pinMode(pirPin, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(pirPin), wakeUp, RISING);
   
   DCF.Start();
   setSyncProvider(DCF.getUTCTime);
@@ -158,6 +185,22 @@ void setup() {
 }
 
 void loop() {
+
+  static unsigned long lastMovementTime = 0;
+  static int lastPIRState = -1;
+  static int lastBrightness = -1;
+  static bool sleepON = false;
+
+  static int fidelioBrightness = 15;
+
+  int currentPIRState = digitalRead(pirPin);
+  if (currentPIRState != lastPIRState) {
+    lastPIRState = currentPIRState;
+  }
+  if (currentPIRState == HIGH) {
+    lastMovementTime = millis();
+  }
+
   if(now() != prevDisplay) //update the display only if the time has changed
   {
     prevDisplay = now();
@@ -168,12 +211,18 @@ void loop() {
     #define maxLight 200
     int currentBrightness = analogRead(lightPin);
     currentBrightness = constrain(currentBrightness, 0, maxLight);
-    int fidelioBrightness = map(maxLight-currentBrightness, 0, maxLight, 0, 16);
-    display.setBright(fidelioBrightness);
+    if (abs(currentBrightness - lastBrightness) >= DELTA) {
+      lastBrightness = currentBrightness;
+      fidelioBrightness = map(maxLight-currentBrightness, 0, maxLight, 0, 16);
+    }
+    if (!sleepON)
+      display.setBright(fidelioBrightness);
     
-    Serial.print(currentBrightness);
-    Serial.print(" : ");
-    Serial.println(fidelioBrightness);   
+    // Serial.print(currentBrightness);
+    // Serial.print(" : ");
+    // Serial.print(fidelioBrightness);   
+    // Serial.print(" : ");
+    // Serial.println(sleepON);
 
     // Serial.print("TS:");
     // Serial.println(timeStatus());
@@ -191,10 +240,19 @@ void loop() {
       } else {
         setTime(dateTimeToTime_t(rtc.now()));
         Serial.println();
-        Serial.print("Updated ATmega to RTC by ") ;        
+        Serial.print("Updated ATmega to RTC by: ") ;        
         Serial.println(delta) ;
       }
     }
   }
+  long timeON = abs(millis() - lastMovementTime);
+  if (!currentPIRState && timeON  > STAYON) {
+   sleepON = true;    
+   Serial.print("Going Sleep");
+   display.Off();
+   DCF.Stop();
+   delay(100);
+   goToSleep();
+  } else sleepON = false;
 }
 
