@@ -7,6 +7,15 @@
 #include <avr/sleep.h>  // Include the AVR sleep library
 #include <avr/power.h>  // Optional, if you want to disable/enable peripherals
 
+// Some debug macros for serial printing :)
+#ifdef VERBOSE_DEBUG
+#define DEBUG(msg) (Serial.print(msg))
+#define DEBUG_LN(msg) (Serial.println(msg))
+#else
+#define DEBUG(msg)
+#define DEBUG_LN(msg)
+#endif
+
 #define DCF_PIN 2	         // Connection pin to DCF 77 device
 #define DCF_INTERRUPT 0		 // Interrupt number associated with pin
 #define lightPin A0        // photo resistor sensor
@@ -16,9 +25,8 @@
 #define LED1      5
 #define LED2      6
 #define pirPin    3
-#define STAYON   120000UL  // 10 min in milliseconds
+#define STAYON   600000UL  // 10 min in milliseconds
 #define DELTA    10
-
 
 #include "fidelio_display.h"
 
@@ -26,7 +34,6 @@
 
     #define dioPin 13
     #define clkPin 14
-
     #define stbPin 10
     #define spiClk 250000UL 
 
@@ -62,25 +69,29 @@ unsigned long getDCFTime()
 }
 
 void printDigits(int digits){
-  // utility function for digital clock display: prints preceding colon and leading 0
-  Serial.print(":");
-  if(digits < 10)
-    Serial.print('0');
-  Serial.print(digits);
+  #ifdef VERBOSE_DEBUG
+    // utility function for digital clock display: prints preceding colon and leading 0
+    Serial.print(":");
+    if(digits < 10)
+      Serial.print('0');
+    Serial.print(digits);
+  #endif
 }
 
 void digitalClockDisplay(){
-  // digital clock display of the time
-  Serial.print(hour());
-  printDigits(minute());
-  printDigits(second());
-  Serial.print(" ");
-  Serial.print(day());
-  Serial.print(" ");
-  Serial.print(month());
-  Serial.print(" ");
-  Serial.print(year()); 
-  Serial.println(); 
+  #ifdef VERBOSE_DEBUG
+    // digital clock display of the time
+    Serial.print(hour());
+    printDigits(minute());
+    printDigits(second());
+    Serial.print(" ");
+    Serial.print(day());
+    Serial.print(" ");
+    Serial.print(month());
+    Serial.print(" ");
+    Serial.print(year()); 
+    Serial.println(); 
+  #endif
 }
 
 void intToTimeString(char *str, int hour, int minute) {
@@ -103,7 +114,7 @@ void showSyncProcess(){
     timetxt[1] = ':';
     display.pm(!DCF.bufOk);
     display.write(timetxt);
-    // Serial.println(); Serial.print("In sync process: "); Serial.println(timetxt);
+    // DEBUG_LN(); Serial.print("In sync process: "); DEBUG_LN(timetxt);
   #endif
 }
 
@@ -121,33 +132,26 @@ time_t dateTimeToTime_t(DateTime dt) {
 DateTime time_tToDateTime(time_t t) {
     tmElements_t tm;
     breakTime(t, tm); // Break the time_t into components
-
     // Construct and return a DateTime object
     return DateTime(tm.Year + 1970, tm.Month, tm.Day, tm.Hour, tm.Minute, tm.Second);
 }
 
-
+volatile long lastMovementTime;
 void wakeUp() {
+  lastMovementTime = millis();
 }
 
 void goToSleep() {
-  // Simulated sleep mode
-  ADCSRA &= ~(1 << ADEN);  // Disable ADC to save power
+  power_all_disable();
   set_sleep_mode(SLEEP_MODE_PWR_DOWN);
   sleep_enable();
   sleep_mode();
-
   // Processor wakes up here after ISR
   sleep_disable();
-  ADCSRA |= (1 << ADEN);   // Re-enable ADC
+  power_all_enable();
   setTime(dateTimeToTime_t(rtc.now()));
   DCF.Start();
 }
-
-time_t prevDisplay = 0;          // when the digital clock was displayed
-time_t lastSync = 0;
-timeStatus_t lastStatus = timeNotSet;
-
 
 enum clockStatusT {main, showDCF, other};
 // Define button values
@@ -179,7 +183,7 @@ int myButton() {
   }
   if (currentTime - lastDebounceTime > PRESSED_TIME) {
     if (lastButtonState == i+1 && buttonNotHandled) {
-      // Serial.println(buttons);
+      // DEBUG_LN(buttons);
       buttonNotHandled = false;
       return lastButtonState;
     } else return 0;
@@ -188,7 +192,9 @@ int myButton() {
 }
 
 void setup() {
-  Serial.begin(9600);
+  #ifdef VERBOSE_DEBUG
+    Serial.begin(9600);
+  #endif
   pinMode(LED1, OUTPUT);
   pinMode(LED2, OUTPUT);
   digitalWrite(LED1, 0);
@@ -208,50 +214,35 @@ void setup() {
   #endif
 
   if (! rtc.begin()) {
-    Serial.println("Could not find RTC");
+    DEBUG_LN("Could not find RTC");
   }
 
   if (! rtc.isrunning()) {
-    Serial.println("RTC is NOT running, let's set the time!");
+    DEBUG_LN("RTC is NOT running, let's set the time!");
 
     setSyncInterval(30);
 
-    Serial.println("Waiting for DCF77 time ... ");
-    Serial.println("It will take at least 2 minutes until a first update can be processed.");
+    DEBUG_LN("Waiting for DCF77 time ... ");
+    DEBUG_LN("It will take at least 2 minutes until a first update can be processed.");
     while(timeStatus()== timeNotSet) { 
       showSyncProcess();
       delay(250);
     }
     rtc.adjust(time_tToDateTime(now()));
-    Serial.println("Updated ATmega to DCF") ;
+    DEBUG_LN("Updated ATmega to DCF") ;
   } else {
     setTime(dateTimeToTime_t(rtc.now()));
-    Serial.println("Updated ATmega to RTC") ;
+    DEBUG_LN("Updated ATmega to RTC") ;
   }
   setSyncInterval(180);
-  lastStatus = timeStatus();
-  lastSync = now();
-
 }
 
 void loop() {
-
-  long timeON;
-  static unsigned long lastMovementTime = 0;
-  static int lastPIRState = -1;
+  static time_t prevDisplay = 0;          // when the digital clock was displayed
   static int lastBrightness = -1;
-  static bool sleepON = false;
   static clockStatusT clockStatus = main;
-
   static int fidelioBrightness = 7;
-
   int currentPIRState = digitalRead(pirPin);
-  if (currentPIRState != lastPIRState) {
-    lastPIRState = currentPIRState;
-  }
-  if (currentPIRState == HIGH) {
-    lastMovementTime = millis();
-  }
 
   #define maxLight 300
   int currentBrightness = analogRead(lightPin);
@@ -263,7 +254,7 @@ void loop() {
   
   int button = myButton();
   if (button > 0) {
-    // Serial.println(); Serial.print("Pressed: ");     Serial.println(button);
+    // DEBUG_LN(); DEBUG("Pressed: ");     DEBUG_LN(button);
     // digitalWrite(LED_BUILTIN, (digitalRead(LED_BUILTIN) ^ 1));
     // if (1 == button || 2 == button || 3 == button || 4 == button) {
     //   digitalWrite(LED1, (digitalRead(LED1) ^ 1));
@@ -276,18 +267,15 @@ void loop() {
 
   switch (clockStatus)  {
       case main:
-        if(now() != prevDisplay) //update the display only if the time has changed
-        {
+        if(now() != prevDisplay) { //update the display only if the time has changed
           prevDisplay = now();
           // digitalClockDisplay();
           time_t LocalTime = CET.toLocal(now());
           intToTimeString(timetxt, hour(LocalTime), minute(LocalTime));
-
-          if (!sleepON)
-            display.setBright(fidelioBrightness);
-            // Serial.println(); Serial.print("Level: "); Serial.println(fidelioBrightness);
-            // Serial.print("TS:");
-            // Serial.println(timeStatus());
+          display.setBright(fidelioBrightness);
+          // DEBUG_LN(); DEBUG("Level: "); DEBUG_LN(fidelioBrightness);
+          // DEBUG("TS:");
+          // DEBUG_LN(timeStatus());
           display.alarm( (timeStatus() != timeSet) );
           display.pm(!DCF.bufOk);
           display.toogleDots(); 
@@ -296,35 +284,35 @@ void loop() {
           if ( 0 != delta ) {
             if (timeStatus() == timeSet && DCF.bufOk) {
               rtc.adjust(time_tToDateTime(now()));
-              Serial.println();
-              Serial.print("Updated RTC to DCF77 by: ") ;
-              Serial.println(delta);
+              DEBUG_LN();
+              DEBUG("Updated RTC to DCF77 by: ") ;
+              DEBUG_LN(delta);
             } else {
               setTime(dateTimeToTime_t(rtc.now()));
-              Serial.println();
-              Serial.print("Updated ATmega to RTC by: ") ;        
-              Serial.println(delta) ;
+              DEBUG_LN();
+              DEBUG("Updated ATmega to RTC by: ") ;        
+              DEBUG_LN(delta) ;
             }
           }
         }
-        timeON = abs(millis() - lastMovementTime);
-        if (!currentPIRState && timeON  > STAYON) {
-          sleepON = true;    
-          Serial.print("Going Sleep");
+        if (!currentPIRState && (abs(millis() - lastMovementTime)  > STAYON) ) {
+          DEBUG_LN("Going sleep");
           display.Off();
           DCF.Stop();
           delay(100);
           goToSleep();
-        } else sleepON = false;
-        // Serial.println(); Serial.print("Status 0: "); Serial.println(clockStatus);
+          delay(500);
+          DEBUG_LN("Waking up");
+        }
+        // DEBUG_LN(); DEBUG("Status 0: "); DEBUG_LN(clockStatus);
         break;
       case showDCF:
-        //Serial.println(); Serial.print("Status 1: "); Serial.println(clockStatus);
+        //DEBUG_LN(); DEBUG("Status 1: "); DEBUG_LN(clockStatus);
         display.setBright(fidelioBrightness);
         showSyncProcess();
         if (timeStatus() == timeSet && DCF.bufOk) { 
           rtc.adjust(time_tToDateTime(now()));
-          Serial.println("Time updated to DCF");
+          DEBUG_LN("Time updated to DCF");
           clockStatus = main;
         }
         break;
@@ -332,4 +320,3 @@ void loop() {
         break;
   }
 }
-
