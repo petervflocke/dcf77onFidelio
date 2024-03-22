@@ -16,6 +16,7 @@
 #define DEBUG_LN(msg)
 #endif
 
+
 #define DCF_PIN 2	         // Connection pin to DCF 77 device
 #define DCF_INTERRUPT 0		 // Interrupt number associated with pin
 #define lightPin A0        // photo resistor sensor
@@ -25,8 +26,11 @@
 #define LED1      5
 #define LED2      6
 #define pirPin    3
-#define STAYON   600000UL  // 10 min in milliseconds
+#define STAYON   180000UL  // 10 min in milliseconds
 #define DELTA    10
+
+// based on the powerbank type, disable deep sleep to avoid switching powerbank off due to low current consumption
+const boolean trueSleep = false;  
 
 #include "fidelio_display.h"
 
@@ -238,6 +242,7 @@ void setup() {
 }
 
 void loop() {
+  static boolean displayOff = false; 
   static time_t prevDisplay = 0;          // when the digital clock was displayed
   static int lastBrightness = -1;
   static clockStatusT clockStatus = main;
@@ -269,17 +274,20 @@ void loop() {
       case main:
         if(now() != prevDisplay) { //update the display only if the time has changed
           prevDisplay = now();
-          // digitalClockDisplay();
-          time_t LocalTime = CET.toLocal(now());
-          intToTimeString(timetxt, hour(LocalTime), minute(LocalTime));
-          display.setBright(fidelioBrightness);
-          // DEBUG_LN(); DEBUG("Level: "); DEBUG_LN(fidelioBrightness);
-          // DEBUG("TS:");
-          // DEBUG_LN(timeStatus());
-          display.alarm( (timeStatus() != timeSet) );
-          display.pm(!DCF.bufOk);
-          display.toogleDots(); 
-          display.write(timetxt);
+          
+          if (!displayOff) {
+            // digitalClockDisplay();
+            time_t LocalTime = CET.toLocal(now());
+            intToTimeString(timetxt, hour(LocalTime), minute(LocalTime));
+            display.setBright(fidelioBrightness);
+            // DEBUG_LN(); DEBUG("Level: "); DEBUG_LN(fidelioBrightness);
+            // DEBUG("TS:");
+            // DEBUG_LN(timeStatus());
+            display.alarm( (timeStatus() != timeSet) );
+            display.pm(!DCF.bufOk);
+            display.toogleDots(); 
+            display.write(timetxt);
+          } 
           int delta = now() - dateTimeToTime_t(rtc.now());
           if ( 0 != delta ) {
             if (timeStatus() == timeSet && DCF.bufOk) {
@@ -296,13 +304,24 @@ void loop() {
           }
         }
         if (!currentPIRState && (abs(millis() - lastMovementTime)  > STAYON) ) {
-          DEBUG_LN("Going sleep");
-          display.Off();
-          DCF.Stop();
-          delay(100);
-          goToSleep();
-          delay(500);
-          DEBUG_LN("Waking up");
+          if (trueSleep) {
+            DEBUG_LN("Going sleep");
+            display.Off();
+            DCF.Stop();
+            delay(100);
+            goToSleep();
+            delay(500);
+            DEBUG_LN("Waking up");
+            displayOff = false;
+          } else {
+            displayOff = true;
+            display.cls();
+            display.Off();
+            // DEBUG_LN("Turn display OFF");
+          }
+        } else {
+          displayOff = false;
+          // DEBUG_LN("Turn display ON");
         }
         // DEBUG_LN(); DEBUG("Status 0: "); DEBUG_LN(clockStatus);
         break;
